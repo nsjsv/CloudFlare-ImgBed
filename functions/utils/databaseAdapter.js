@@ -1,6 +1,9 @@
 /**
  * 数据库适配器
- * 提供统一的接口，可以在KV和D1之间切换
+ * 提供统一的接口，可以在KV、D1和远程PostgreSQL之间切换
+ * 
+ * 修改版 - 添加了 RemoteDBAdapter 支持
+ * 小亚为主人写的～♡
  */
 
 import { D1Database } from './d1Database.js';
@@ -11,7 +14,13 @@ import { D1Database } from './d1Database.js';
  * @returns {Object} 数据库适配器实例
  */
 export function createDatabaseAdapter(env) {
-    // 检查是否配置了数据库
+    // 优先使用远程 PostgreSQL 数据库
+    if (env.REMOTE_DB_URL && env.REMOTE_DB_API_KEY) {
+        console.log('Using Remote PostgreSQL database');
+        return new RemoteDBAdapter(env.REMOTE_DB_URL, env.REMOTE_DB_API_KEY);
+    }
+    
+    // 检查是否配置了本地数据库
     if (env.img_url && typeof env.img_url.get === 'function') {
         // 使用KV存储
         return new KVAdapter(env.img_url);
@@ -19,8 +28,130 @@ export function createDatabaseAdapter(env) {
         // 使用D1数据库
         return new D1Database(env.img_d1);
     } else {
-        console.error('No database configured. Please configure either KV (env.img_url) or D1 (env.img_d1).');
+        console.error('No database configured. Please configure either KV (env.img_url), D1 (env.img_d1), or Remote DB (env.REMOTE_DB_URL).');
         return null;
+    }
+}
+
+/**
+ * 远程数据库适配器类
+ * 通过 HTTP API 调用本地 PostgreSQL 服务
+ */
+class RemoteDBAdapter {
+    constructor(apiUrl, apiKey) {
+        this.apiUrl = apiUrl.replace(/\/$/, ''); // 移除末尾斜杠
+        this.apiKey = apiKey;
+    }
+
+    async _fetch(endpoint, body) {
+        const response = await fetch(`${this.apiUrl}${endpoint}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': this.apiKey
+            },
+            body: JSON.stringify(body)
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Remote DB API error: ${response.status} - ${errorText}`);
+        }
+        
+        return response.json();
+    }
+
+    // 通用方法
+    async put(key, value, options) {
+        return this._fetch('/api/put', { key, value, options });
+    }
+
+    async get(key) {
+        const result = await this._fetch('/api/get', { key });
+        return result.value;
+    }
+
+    async getWithMetadata(key) {
+        return this._fetch('/api/getWithMetadata', { key });
+    }
+
+    async delete(key) {
+        return this._fetch('/api/delete', { key });
+    }
+
+    async list(options) {
+        return this._fetch('/api/list', options || {});
+    }
+
+    // 文件操作别名
+    async putFile(fileId, value, options) {
+        return this.put(fileId, value, options);
+    }
+
+    async getFile(fileId) {
+        return this.getWithMetadata(fileId);
+    }
+
+    async getFileWithMetadata(fileId) {
+        return this.getWithMetadata(fileId);
+    }
+
+    async deleteFile(fileId) {
+        return this.delete(fileId);
+    }
+
+    async listFiles(options) {
+        return this.list(options);
+    }
+
+    // 设置操作别名
+    async putSetting(key, value) {
+        return this.put(key, value);
+    }
+
+    async getSetting(key) {
+        return this.get(key);
+    }
+
+    async deleteSetting(key) {
+        return this.delete(key);
+    }
+
+    async listSettings(options) {
+        return this.list(options);
+    }
+
+    // 索引操作
+    async putIndexOperation(operationId, operation) {
+        const key = 'manage@index@operation_' + operationId;
+        return this.put(key, JSON.stringify(operation));
+    }
+
+    async getIndexOperation(operationId) {
+        const key = 'manage@index@operation_' + operationId;
+        const result = await this.get(key);
+        return result ? JSON.parse(result) : null;
+    }
+
+    async deleteIndexOperation(operationId) {
+        const key = 'manage@index@operation_' + operationId;
+        return this.delete(key);
+    }
+
+    async listIndexOperations(options) {
+        const listOptions = Object.assign({}, options, {
+            prefix: 'manage@index@operation_'
+        });
+        const result = await this.list(listOptions);
+        
+        const operations = [];
+        for (const item of result.keys) {
+            operations.push({
+                id: item.name.replace('manage@index@operation_', '')
+            });
+        }
+        
+        return operations;
     }
 }
 
@@ -148,7 +279,7 @@ class KVAdapter {
 export function getDatabase(env) {
     var adapter = createDatabaseAdapter(env);
     if (!adapter) {
-        throw new Error('Database not configured. Please configure D1 database (env.img_d1) or KV storage (env.img_url).');
+        throw new Error('Database not configured. Please configure D1 database (env.img_d1), KV storage (env.img_url), or Remote DB (env.REMOTE_DB_URL).');
     }
     return adapter;
 }
@@ -161,12 +292,15 @@ export function getDatabase(env) {
 export function checkDatabaseConfig(env) {
     var hasD1 = env.img_d1 && typeof env.img_d1.prepare === 'function';
     var hasKV = env.img_url && typeof env.img_url.get === 'function';
+    var hasRemote = env.REMOTE_DB_URL && env.REMOTE_DB_API_KEY;
 
     return {
         hasD1: hasD1,
         hasKV: hasKV,
-        usingD1: hasD1,
-        usingKV: !hasD1 && hasKV,
-        configured: hasD1 || hasKV
+        hasRemote: hasRemote,
+        usingRemote: hasRemote,
+        usingD1: !hasRemote && hasD1,
+        usingKV: !hasRemote && !hasD1 && hasKV,
+        configured: hasD1 || hasKV || hasRemote
     };
 }
