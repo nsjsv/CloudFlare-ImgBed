@@ -167,21 +167,32 @@ class RemoteDBAdapter {
     }
 
     async _fetch(endpoint, body) {
-        const response = await fetch(`${this.apiUrl}${endpoint}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Key': this.apiKey
-            },
-            body: JSON.stringify(body)
-        });
-        
+        console.log('[RemoteDB] -> POST', endpoint, body);
+
+        let response;
+        try {
+            response = await fetch(`${this.apiUrl}${endpoint}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': this.apiKey
+                },
+                body: JSON.stringify(body)
+            });
+        } catch (error) {
+            console.error('[RemoteDB] !! FETCH failed', endpoint, error && error.message ? error.message : error);
+            throw error;
+        }
+
         if (!response.ok) {
             const errorText = await response.text();
+            console.error('[RemoteDB] <- ERROR', response.status, endpoint, errorText);
             throw new Error(`Remote DB API error: ${response.status} - ${errorText}`);
         }
-        
-        return response.json();
+
+        const result = await response.json();
+        console.log('[RemoteDB] <- OK', response.status, endpoint);
+        return result;
     }
 
     // 通用方法
