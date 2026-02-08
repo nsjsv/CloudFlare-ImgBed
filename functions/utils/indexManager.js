@@ -302,7 +302,6 @@ export async function batchMoveFilesInIndex(context, moveOperations) {
  * @returns {Object} 合并结果
  */
 export async function mergeOperationsToIndex(context, options = {}) {
-    const { request } = context;
     const { cleanupAfterMerge = true } = options;
     
     try {
@@ -429,19 +428,19 @@ export async function mergeOperationsToIndex(context, options = {}) {
             await cleanupOperations(context, processedOperationIds);
         }
 
-        // 如果未处理完所有操作，调用 merge-operations API 递归处理
+        // 如果未处理完所有操作，不在当前请求内递归调用，避免触发子请求上限
         if (!isALLOperations) {
             console.log('There are remaining operations, will process them in subsequent calls.');
-
-            const headers = new Headers(request.headers);
-            const originUrl = new URL(request.url);
-            const mergeUrl = `${originUrl.protocol}//${originUrl.host}/api/manage/list?action=merge-operations`;
-
-            await fetch(mergeUrl, { method: 'GET', headers });
-
             return {
-                success: false,
-                error: 'There are remaining operations, will process them in subsequent calls.'
+                success: true,
+                partial: true,
+                remainingOperations: true,
+                processedOperations: operationsProcessed,
+                addedCount,
+                updatedCount,
+                removedCount,
+                movedCount,
+                totalFiles: workingIndex.totalCount
             };
         }
 
@@ -1003,7 +1002,7 @@ async function getAllPendingOperations(context, lastOperationId = null) {
     const operations = [];
 
     let cursor = null;
-    const MAX_OPERATION_COUNT = 30; // 单次获取的最大操作数量
+    const MAX_OPERATION_COUNT = 8; // 单次获取的最大操作数量（降低以避免 Cloudflare 子请求超限）
     let isALL = true; // 是否获取了所有操作
     let operationCount = 0;
 
@@ -1218,9 +1217,9 @@ function applyBatchMoveOperation(index, data) {
  * 并发清理指定的原子操作记录
  * @param {Object} context - 上下文对象
  * @param {Array} operationIds - 要清理的操作ID数组
- * @param {number} concurrency - 并发数量，默认为10
+ * @param {number} concurrency - 并发数量，默认为2
  */
-async function cleanupOperations(context, operationIds, concurrency = 10) {
+async function cleanupOperations(context, operationIds, concurrency = 2) {
     const { env } = context;
     const db = getDatabase(env);
 
