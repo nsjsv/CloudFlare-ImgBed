@@ -8,16 +8,64 @@
 
 import { D1Database } from './d1Database.js';
 
+function normalizeEnvValue(value) {
+    if (typeof value === 'string') {
+        return value.trim();
+    }
+
+    if (value && typeof value === 'object') {
+        if (typeof value.value === 'string') return value.value.trim();
+        if (typeof value.secret === 'string') return value.secret.trim();
+        if (typeof value.text === 'string') return value.text.trim();
+    }
+
+    return '';
+}
+
+function getEnvString(env, keys) {
+    for (const key of keys) {
+        const candidate = normalizeEnvValue(env && env[key]);
+        if (candidate) return candidate;
+    }
+
+    if (typeof process !== 'undefined' && process && process.env) {
+        for (const key of keys) {
+            const candidate = normalizeEnvValue(process.env[key]);
+            if (candidate) return candidate;
+        }
+    }
+
+    return '';
+}
+
+function getRemoteDbUrl(env) {
+    return getEnvString(env, ['REMOTE_DB_URL']);
+}
+
+function getRemoteDbApiKey(env) {
+    return getEnvString(env, [
+        'REMOTE_DB_API_KEY',
+        'REMOTE_DB_APIKEY',
+        'REMOTE_DB_KEY',
+        'REMOTE_DB_API_SECRET',
+        'REMOTE_DB_API_TOKEN',
+        'REMOTE_DB_TOKEN'
+    ]);
+}
+
 /**
  * 创建数据库适配器
  * @param {Object} env - 环境变量
  * @returns {Object} 数据库适配器实例
  */
 export function createDatabaseAdapter(env) {
+    const remoteDbUrl = getRemoteDbUrl(env);
+    const remoteDbApiKey = getRemoteDbApiKey(env);
+
     // 优先使用远程 PostgreSQL 数据库
-    if (env.REMOTE_DB_URL && env.REMOTE_DB_API_KEY) {
+    if (remoteDbUrl && remoteDbApiKey) {
         console.log('Using Remote PostgreSQL database');
-        return new RemoteDBAdapter(env.REMOTE_DB_URL, env.REMOTE_DB_API_KEY);
+        return new RemoteDBAdapter(remoteDbUrl, remoteDbApiKey);
     }
     
     // 检查是否配置了本地数据库
@@ -43,6 +91,81 @@ class RemoteDBAdapter {
         this.apiKey = apiKey;
     }
 
+    _arrayBufferToBase64(arrayBuffer) {
+        if (typeof Buffer !== 'undefined') {
+            return Buffer.from(arrayBuffer).toString('base64');
+        }
+
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+    }
+
+    _base64ToArrayBuffer(base64) {
+        if (typeof Buffer !== 'undefined') {
+            const buf = Buffer.from(base64, 'base64');
+            return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+        }
+
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
+    _encodeValue(value) {
+        if (value instanceof ArrayBuffer) {
+            return {
+                __cfdb_type: 'arrayBuffer',
+                base64: this._arrayBufferToBase64(value)
+            };
+        }
+
+        if (ArrayBuffer.isView(value)) {
+            const viewBuffer = value.buffer.slice(
+                value.byteOffset,
+                value.byteOffset + value.byteLength
+            );
+            return {
+                __cfdb_type: 'arrayBuffer',
+                base64: this._arrayBufferToBase64(viewBuffer)
+            };
+        }
+
+        return value;
+    }
+
+    _decodeValue(value, options) {
+        const wantArrayBuffer = options && options.type === 'arrayBuffer';
+        if (!wantArrayBuffer) {
+            return value;
+        }
+
+        if (value == null) {
+            return value;
+        }
+
+        if (
+            typeof value === 'object' &&
+            value.__cfdb_type === 'arrayBuffer' &&
+            typeof value.base64 === 'string'
+        ) {
+            return this._base64ToArrayBuffer(value.base64);
+        }
+
+        if (typeof value === 'string') {
+            return new TextEncoder().encode(value).buffer;
+        }
+
+        return value;
+    }
+
     async _fetch(endpoint, body) {
         const response = await fetch(`${this.apiUrl}${endpoint}`, {
             method: 'POST',
@@ -63,16 +186,24 @@ class RemoteDBAdapter {
 
     // 通用方法
     async put(key, value, options) {
-        return this._fetch('/api/put', { key, value, options });
+        return this._fetch('/api/put', {
+            key,
+            value: this._encodeValue(value),
+            options
+        });
     }
 
-    async get(key) {
-        const result = await this._fetch('/api/get', { key });
-        return result.value;
+    async get(key, options) {
+        const result = await this._fetch('/api/get', { key, options });
+        return this._decodeValue(result.value, options);
     }
 
-    async getWithMetadata(key) {
-        return this._fetch('/api/getWithMetadata', { key });
+    async getWithMetadata(key, options) {
+        const result = await this._fetch('/api/getWithMetadata', { key, options });
+        if (result && Object.prototype.hasOwnProperty.call(result, 'value')) {
+            result.value = this._decodeValue(result.value, options);
+        }
+        return result;
     }
 
     async delete(key) {
@@ -88,12 +219,12 @@ class RemoteDBAdapter {
         return this.put(fileId, value, options);
     }
 
-    async getFile(fileId) {
-        return this.getWithMetadata(fileId);
+    async getFile(fileId, options) {
+        return this.getWithMetadata(fileId, options);
     }
 
-    async getFileWithMetadata(fileId) {
-        return this.getWithMetadata(fileId);
+    async getFileWithMetadata(fileId, options) {
+        return this.getWithMetadata(fileId, options);
     }
 
     async deleteFile(fileId) {
@@ -109,8 +240,8 @@ class RemoteDBAdapter {
         return this.put(key, value);
     }
 
-    async getSetting(key) {
-        return this.get(key);
+    async getSetting(key, options) {
+        return this.get(key, options);
     }
 
     async deleteSetting(key) {
@@ -292,7 +423,7 @@ export function getDatabase(env) {
 export function checkDatabaseConfig(env) {
     var hasD1 = env.img_d1 && typeof env.img_d1.prepare === 'function';
     var hasKV = env.img_url && typeof env.img_url.get === 'function';
-    var hasRemote = env.REMOTE_DB_URL && env.REMOTE_DB_API_KEY;
+    var hasRemote = !!(getRemoteDbUrl(env) && getRemoteDbApiKey(env));
 
     return {
         hasD1: hasD1,
