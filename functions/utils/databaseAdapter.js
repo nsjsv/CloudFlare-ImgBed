@@ -49,7 +49,9 @@ function getRemoteDbApiKey(env) {
         'REMOTE_DB_KEY',
         'REMOTE_DB_API_SECRET',
         'REMOTE_DB_API_TOKEN',
-        'REMOTE_DB_TOKEN'
+        'REMOTE_DB_TOKEN',
+        // 兼容后端常用命名（Rust API 使用 API_KEY）
+        'API_KEY'
     ]);
 }
 

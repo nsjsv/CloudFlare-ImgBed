@@ -31,7 +31,8 @@ export async function onRequest(context) {
     env.REMOTE_DB_KEY ||
     env.REMOTE_DB_API_SECRET ||
     env.REMOTE_DB_API_TOKEN ||
-    env.REMOTE_DB_TOKEN;
+    env.REMOTE_DB_TOKEN ||
+    env.API_KEY;
 
   const remoteUrl = normalizeValue(remoteUrlRaw);
   const remoteKey = normalizeValue(remoteKeyRaw);
@@ -53,6 +54,7 @@ export async function onRequest(context) {
           remoteKeyLen: remoteKey.length,
           envHasRemoteUrlKey: "REMOTE_DB_URL" in env,
           envHasRemoteKeyKey: "REMOTE_DB_API_KEY" in env,
+          envHasApiKeyKey: "API_KEY" in env,
         },
       },
       null,
@@ -67,4 +69,3 @@ export async function onRequest(context) {
     }
   );
 }
-
