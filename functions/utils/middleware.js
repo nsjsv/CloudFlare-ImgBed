@@ -119,11 +119,44 @@ export async function checkDatabaseConfig(context) {
   var dbConfig = checkDbConfig(env);
 
   if (!dbConfig.configured) {
+    try {
+      const remoteUrlRaw = env && env.REMOTE_DB_URL;
+      const remoteKeyRaw =
+        env &&
+        (env.REMOTE_DB_API_KEY ||
+          env.REMOTE_DB_APIKEY ||
+          env.REMOTE_DB_KEY ||
+          env.REMOTE_DB_API_SECRET ||
+          env.REMOTE_DB_API_TOKEN ||
+          env.REMOTE_DB_TOKEN);
+
+      const remoteUrl = remoteUrlRaw == null ? '' : String(remoteUrlRaw).trim();
+      const remoteKey = remoteKeyRaw == null ? '' : String(remoteKeyRaw).trim();
+
+      console.log('[DBCFG] not configured', {
+        hasKV: !!dbConfig.hasKV,
+        hasD1: !!dbConfig.hasD1,
+        hasRemote: !!dbConfig.hasRemote,
+        remoteUrlPresent: !!remoteUrl,
+        remoteUrlType: remoteUrlRaw == null ? 'null' : typeof remoteUrlRaw,
+        remoteKeyPresent: !!remoteKey,
+        remoteKeyType: remoteKeyRaw == null ? 'null' : typeof remoteKeyRaw,
+        remoteKeyLen: remoteKey.length,
+        envHasRemoteUrlKey: !!(env && 'REMOTE_DB_URL' in env),
+        envHasRemoteKeyKey: !!(env && 'REMOTE_DB_API_KEY' in env),
+        envKeysRemote: env
+          ? Object.keys(env).filter((k) => k.startsWith('REMOTE_') || k.startsWith('img_'))
+          : null,
+      });
+    } catch (e) {
+      console.log('[DBCFG] debug log failed', e);
+    }
+
     return new Response(
       JSON.stringify({
         success: false,
         error: "数据库未配置 / Database not configured",
-        message: "请配置 KV 存储 (env.img_url) 或 D1 数据库 (env.img_d1)。 / Please configure KV storage (env.img_url) or D1 database (env.img_d1)."
+        message: "请配置 KV 存储 (env.img_url) / D1 数据库 (env.img_d1) / 远程 DB (env.REMOTE_DB_URL + env.REMOTE_DB_API_KEY)。 / Please configure KV storage (env.img_url), D1 database (env.img_d1), or Remote DB (env.REMOTE_DB_URL + env.REMOTE_DB_API_KEY)."
       }),
       {
         status: 500,
